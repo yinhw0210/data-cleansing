@@ -1,0 +1,20 @@
+# 敏感配置
+.env
+
+# Python 虚拟环境
+.venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 输出文件（每次运行生成）
+data/output/
+*.xlsx
+
+# 日志目录
+logs/
+*.log
+
+# macOS
+.DS_Store

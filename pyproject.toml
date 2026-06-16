@@ -1,0 +1,23 @@
+[project]
+name = "address-pipeline"
+version = "1.0.0"
+description = "物流地址智能解析与补码 — LLM 清洗 + 高德 AutoComplete + 围栏命中"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "geopandas>=1.0",
+    "shapely>=2.0",
+    "openai>=1.0",
+    "python-dotenv>=1.0",
+    "tenacity>=8.0",
+    "requests>=2.31",
+    "typer>=0.15",
+    "rich>=13.0",
+]
+
+[project.scripts]
+address-pipeline = "main:app"
+
+[tool.typer]
+# Typer CLI 配置
