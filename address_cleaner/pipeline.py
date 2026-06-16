@@ -8,6 +8,7 @@ pipeline.py — 数据清洗流水线
 import json
 import logging
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
@@ -114,9 +115,12 @@ class Pipeline:
                 "status": f"失败: LLM异常 - {str(e)[:50]}",
             }
 
-        # Step 2: 高德坐标解析
-        coord = self.amap.resolve(candidates)
-        if coord is None:
+        # Step 2: 高德坐标解析 — 并行获取 3 个候选各自的坐标
+        coords = self.amap.resolve_all(candidates)
+
+        # 收集有效的坐标和对应索引
+        valid_coords = [(i, c) for i, c in enumerate(coords) if c is not None]
+        if not valid_coords:
             return {
                 "waybill_no": waybill_no,
                 "original_address": full_address,
@@ -128,22 +132,46 @@ class Pipeline:
                 "status": "失败: 高德未命中坐标",
             }
 
-        lng, lat = coord
-        loc_str = f"{lng},{lat}"
+        # Step 3: 每个坐标独立围栏匹配 → 收集三段码
+        codes: list[Optional[str]] = [None, None, None]
+        for i, (lng, lat) in [(i, c) for i, c in enumerate(coords) if c is not None]:
+            code = self.matcher.match(lng, lat)
+            codes[i] = code
+            if code:
+                logger.info("候选 %d → 坐标(%.6f,%.6f) → 三段码 %s", i + 1, lng, lat, code)
+            else:
+                logger.info("候选 %d → 坐标(%.6f,%.6f) → 未命中围栏", i + 1, lng, lat)
 
-        # Step 3: 空间匹配
-        code = self.matcher.match(lng, lat)
-        if code is None:
+        # Step 4: 投票 — 取出现最多的三段码
+        valid_codes = [c for c in codes if c is not None]
+        if not valid_codes:
+            # 有坐标但都没命中围栏 → 取候选1的坐标返回
+            lng, lat = coords[0]
             return {
                 "waybill_no": waybill_no,
                 "original_address": full_address,
                 "candidate_1": candidates[0] if len(candidates) > 0 else "",
                 "candidate_2": candidates[1] if len(candidates) > 1 else "",
                 "candidate_3": candidates[2] if len(candidates) > 2 else "",
-                "location": loc_str,
+                "location": f"{lng},{lat}",
                 "san_duan_ma": "",
                 "status": "失败: 未命中片区",
             }
+
+        # 统计 + 投票
+        counter = Counter(valid_codes)
+        winner_code, winner_count = counter.most_common(1)[0]
+        logger.info("围栏投票: %s (得票 %d/有效%d)", dict(counter), winner_count, len(valid_codes))
+
+        # 取投票赢家的坐标（优先候选1的）
+        winner_idx = None
+        for i, code in enumerate(codes):
+            if code == winner_code:
+                winner_idx = i
+                if i == 0:  # 候选1命中则优先
+                    break
+        lng, lat = coords[winner_idx]
+        loc_str = f"{lng},{lat}"
 
         return {
             "waybill_no": waybill_no,
@@ -152,7 +180,7 @@ class Pipeline:
             "candidate_2": candidates[1] if len(candidates) > 1 else "",
             "candidate_3": candidates[2] if len(candidates) > 2 else "",
             "location": loc_str,
-            "san_duan_ma": code,
+            "san_duan_ma": winner_code,
             "status": "成功",
         }
 

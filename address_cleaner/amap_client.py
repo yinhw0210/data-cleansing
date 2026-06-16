@@ -152,15 +152,33 @@ class AmapClient:
             logger.warning("Geocoder 调用失败: '%s' — %s", address[:40], e)
             return None
 
+    def _resolve_one(self, candidate: str) -> Optional[tuple[float, float]]:
+        """
+        为单个候选地址解析坐标：AutoComplete → Geocoder fallback。
+
+        Args:
+            candidate: 单个候选地址
+
+        Returns:
+            (lng, lat) 或 None
+        """
+        # Step 1: AutoComplete
+        tip = self.auto_complete(candidate)
+        if tip is None:
+            return None
+
+        # Step 2: 检查是否有坐标
+        if tip.get("location"):
+            lng_str, lat_str = tip["location"].split(",")
+            return (float(lng_str), float(lat_str))
+
+        # Step 3: 无坐标 → Geocoder 兜底
+        name = tip.get("name") or candidate
+        return self.geocode(name)
+
     def resolve(self, candidates: list[str]) -> Optional[tuple[float, float]]:
         """
-        按优先级解析坐标：AutoComplete → Geocoder fallback。
-
-        对 3 个候选地址依次尝试：
-          1. 调用 auto_complete
-          2. 若返回结果包含 location → 解析坐标直接返回
-          3. 若返回结果无坐标但有 name → 调用 geocode(name) 兜底
-          4. 首个成功即返回，全部失败返回 None
+        按优先级解析坐标，首个成功即返回。
 
         Args:
             candidates: 3 个候选标准地址（精确度从高到低）
@@ -170,25 +188,34 @@ class AmapClient:
         """
         for i, candidate in enumerate(candidates):
             logger.info("尝试候选 %d/3: '%s'", i + 1, candidate[:50])
-
-            # Step 1: AutoComplete
-            tip = self.auto_complete(candidate)
-            if tip is None:
-                continue
-
-            # Step 2: 检查是否有坐标
-            if tip.get("location"):
-                lng_str, lat_str = tip["location"].split(",")
-                lng, lat = float(lng_str), float(lat_str)
-                logger.info("候选 %d 命中: (%.6f, %.6f)", i + 1, lng, lat)
-                return (lng, lat)
-
-            # Step 3: 无坐标 → Geocoder 兜底
-            name = tip.get("name") or candidate
-            coord = self.geocode(name)
+            coord = self._resolve_one(candidate)
             if coord is not None:
-                logger.info("候选 %d Geocoder 兜底命中: (%.6f, %.6f)", i + 1, *coord)
+                logger.info("候选 %d 命中: (%.6f, %.6f)", i + 1, *coord)
                 return coord
 
         logger.warning("全部 3 个候选地址均未命中坐标")
         return None
+
+    def resolve_all(self, candidates: list[str]) -> list[Optional[tuple[float, float]]]:
+        """
+        并行解析所有候选地址的坐标，不短路。
+
+        对 3 个候选分别调用 AutoComplete → Geocoder fallback，
+        返回与输入等长的列表，未命中的位置为 None。
+
+        Args:
+            candidates: 3 个候选标准地址
+
+        Returns:
+            坐标列表，如 [(118.2, 35.0), None, (118.3, 35.1)]
+        """
+        results: list[Optional[tuple[float, float]]] = []
+        for i, candidate in enumerate(candidates):
+            logger.info("并行候选 %d/3: '%s'", i + 1, candidate[:50])
+            coord = self._resolve_one(candidate)
+            if coord is not None:
+                logger.info("候选 %d 命中: (%.6f, %.6f)", i + 1, *coord)
+            else:
+                logger.info("候选 %d 未命中", i + 1)
+            results.append(coord)
+        return results
